@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"log"
 	"os"
 
 	"github.com/vmware/govmomi/ovf"
@@ -77,10 +78,14 @@ func (flag *OptionsFlag) Process(ctx context.Context) error {
 	if flag.Path != "-" {
 		in, err = os.Open(flag.Path)
 		if err != nil {
-			return err
+			panic(err)
 		}
 		defer in.Close()
 	}
+	log.Print("Options file path: ", flag.Path)
+	//log.Printf("Options existing: %+v\n", flag.Options)
 
-	return json.NewDecoder(in).Decode(&flag.Options)
+	json.NewDecoder(in).Decode(&flag.Options)
+	log.Printf("Options decode: %+v\n", &flag.Options)
+	return nil
 }

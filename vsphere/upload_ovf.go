@@ -27,14 +27,14 @@ import (
 )
 
 type ovfx struct {
-	*flags.DatastoreFlag
-	*flags.HostSystemFlag
+	//	*flags.DatastoreFlag
+	//	*flags.HostSystemFlag
 	*flags.OutputFlag
-	*flags.ResourcePoolFlag
+	//	*flags.ResourcePoolFlag
 
 	*ArchiveFlag
 	*OptionsFlag
-	*FolderFlag
+	//  *FolderFlag
 
 	Name string
 
@@ -42,6 +42,8 @@ type ovfx struct {
 	Datacenter   *object.Datacenter
 	Datastore    *object.Datastore
 	ResourcePool *object.ResourcePool
+	HostSystem   *object.HostSystem
+	Folder       *object.Folder
 	Archive      Archive
 	Options      Options
 }
@@ -98,7 +100,7 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 	//var fpath = "/home/howels/Downloads/VMware-VCSA-all-6.0.0-5326177/VMware-vCenter-Server-Appliance-6.0.0.30200-5326079_OVF10.ovf"
 	// var fpath = "~/Downloads/VMware-VCSA-all-6.0.0-5326177.ova"
 	// //var fpath = "*.ovf"
-	var optpath = "~/vcsa.json"
+	//var optpath = "/home/howels/vcsa.json"
 	//var vmName = "test-vc.int"
 	// var datastoreName = "vol-SSD_TOSHIBA_PX04SMB080-1"
 
@@ -121,7 +123,8 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 	cmd := &ovfx{
 		Name:        vmName,
 		ArchiveFlag: &ArchiveFlag{Archive: archive},
-		OptionsFlag: &OptionsFlag{Options: *options, Path: optpath},
+		OptionsFlag: &OptionsFlag{Options: *options, Path: optionsList},
+		OutputFlag:  &flags.OutputFlag{TTY: true},
 	}
 
 	// Simple example code to login
@@ -148,6 +151,17 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		log.Fatal(fmt.Errorf("failed to parse ovf: %s", err.Error()))
 		panic(err)
 	}
+
+	//parse options
+	err2 := cmd.OptionsFlag.Process(ctx)
+	if err2 != nil {
+		log.Print("Faileed to parse options")
+	}
+
+	//check the options data
+	log.Print("Options flags: ", cmd.Options)
+	log.Print("OVF envelope: ", e)
+	//log.Print("OVF data: ", o)
 
 	name := "Govc Virtual Appliance"
 	if e.VirtualSystem != nil {
@@ -187,8 +201,23 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		log.Print("Could not retrieve ClusterComputeResource under path: ", rootPath)
 		panic(err)
 	}
-	log.Print("Found a cluster called: ", clusters[0].Name())
-	cmd.ResourcePool, err = clusters[0].ResourcePool(ctx)
+	if len(clusters) == 0 {
+		log.Fatal("No clusters found, aborting.")
+	}
+	var cluster = clusters[0]
+	var hosts []*object.HostSystem
+	hosts, err = cluster.ComputeResource.Hosts(ctx)
+	if err != nil {
+		panic(err)
+	}
+	if len(hosts) == 0 {
+		log.Fatal("No hostssystems found, aborting.")
+	}
+	var host = hosts[0]
+	cmd.HostSystem = host
+	log.Print("Found a cluster called: ", cluster.Name())
+	log.Print("Found a host in the cluster called: ", host.Name())
+	cmd.ResourcePool, err = cluster.ComputeResource.ResourcePool(ctx)
 	if err != nil {
 		log.Print("More than one ResourcePool was found but code assuming only a single ResourcePool present")
 		panic(err)
@@ -208,6 +237,15 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 
 	cmd.Datastore = datastore
 
+	log.Print(cmd.NetworkMap(e))
+
+	//Locate folder
+	folder, err := finder.Folder(ctx, rootPath+"/vm")
+	if err != nil {
+		log.Fatal("Cannot find VM folder: ", err)
+	}
+	cmd.Folder = folder
+
 	//Locate networks
 	//TODO
 
@@ -223,6 +261,8 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		NetworkMapping:  cmd.NetworkMap(e),
 	}
 
+	log.Print(cisp)
+
 	ovfm := object.NewOvfManager(cmd.Client)
 	spec, err := ovfm.CreateImportSpec(ctx, string(o), cmd.ResourcePool, cmd.Datastore, cisp)
 	if err != nil {
@@ -233,7 +273,7 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 	}
 	if spec.Warning != nil {
 		for _, w := range spec.Warning {
-			_, _ = cmd.Log(fmt.Sprintf("Warning: %s\n", w.LocalizedMessage))
+			log.Print(fmt.Sprintf("Warning: %s\n", w.LocalizedMessage))
 		}
 	}
 
@@ -244,18 +284,6 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		case *types.VirtualAppImportSpec:
 			s.VAppConfigSpec.Annotation = cmd.Options.Annotation
 		}
-	}
-
-	var host *object.HostSystem
-	if cmd.SearchFlag.IsSet() {
-		if host, err = cmd.HostSystem(); err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	folder, err := cmd.Folder()
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	lease, err := cmd.ResourcePool.ImportVApp(ctx, spec.ImportSpec, folder, host)
@@ -274,6 +302,7 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 
 	for _, device := range info.DeviceUrl {
 		for _, item := range spec.FileItem {
+
 			if device.ImportKey != item.DeviceId {
 				continue
 			}
@@ -289,6 +318,7 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 				ch:   make(chan progress.Report),
 			}
 
+			log.Printf("Adding item '%v' to upload queue", item.Path)
 			items = append(items, i)
 		}
 	}
@@ -303,7 +333,66 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		}
 	}
 
-	//return &info.Entity, lease.HttpNfcLeaseComplete(ctx)
+	moref, err := &info.Entity, lease.HttpNfcLeaseComplete(ctx)
+	if err != nil {
+		panic(err)
+	}
+	vm := object.NewVirtualMachine(cmd.Client, *moref)
+	if err := cmd.InjectOvfEnv(vm); err != nil {
+		panic(err)
+	}
+
+}
+
+func (cmd *ovfx) InjectOvfEnv(vm *object.VirtualMachine) error {
+	if !cmd.Options.InjectOvfEnv {
+		return nil
+	}
+
+	cmd.Log("Injecting OVF environment...\n")
+
+	var opts []types.BaseOptionValue
+
+	a := cmd.Client.ServiceContent.About
+
+	// build up Environment in order to marshal to xml
+	var props []ovf.EnvProperty
+	for _, p := range cmd.Options.PropertyMapping {
+		props = append(props, ovf.EnvProperty{
+			Key:   p.Key,
+			Value: p.Value,
+		})
+	}
+
+	env := ovf.Env{
+		EsxID: vm.Reference().Value,
+		Platform: &ovf.PlatformSection{
+			Kind:    a.Name,
+			Version: a.Version,
+			Vendor:  a.Vendor,
+			Locale:  "US",
+		},
+		Property: &ovf.PropertySection{
+			Properties: props,
+		},
+	}
+
+	opts = append(opts, &types.OptionValue{
+		Key:   "guestinfo.ovfEnv",
+		Value: env.MarshalManual(),
+	})
+
+	ctx := context.Background()
+
+	task, err := vm.Reconfigure(ctx, types.VirtualMachineConfigSpec{
+		ExtraConfig: opts,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return task.Wait(ctx)
 }
 
 func (cmd *ovfx) Map(op []Property) (p []types.KeyValue) {
