@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/vmware/govmomi/examples"
+	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/govc/flags"
 	//. "github.com/vmware/govmomi/govc/importx"
@@ -38,14 +38,15 @@ type ovfx struct {
 
 	Name string
 
-	Client       *vim25.Client
-	Datacenter   *object.Datacenter
-	Datastore    *object.Datastore
-	ResourcePool *object.ResourcePool
-	HostSystem   *object.HostSystem
-	Folder       *object.Folder
-	Archive      Archive
-	Options      Options
+	Client *vim25.Client
+	// Datacenter   *object.Datacenter
+	// Datastore    *object.Datastore
+	// ResourcePool *object.ResourcePool
+	// HostSystem   *object.HostSystem
+	// Folder       *object.Folder
+	//Archive Archive
+	//Options      Options
+	//Target       OptionsFlagTarget
 }
 
 type ovfFileItem struct {
@@ -93,7 +94,7 @@ func dectectFileType(filepath string) (string, error) {
 }
 
 // Upload is a test function to push a new OVA to vCenter
-func Upload(datastoreName string, clusterName string, optionsList string, vmName string, fpath string) {
+func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 
 	// Setup paths and options
 	// cli.Register("import.ovf", &ovfx{})
@@ -104,41 +105,39 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 	//var vmName = "test-vc.int"
 	// var datastoreName = "vol-SSD_TOSHIBA_PX04SMB080-1"
 
-	ftype, err := dectectFileType(fpath)
+	ftype, err := dectectFileType(optflags.Path)
 	if err != nil {
 		panic(err)
 	}
+	var fpath string
 	var archive Archive
 	if strings.Contains(ftype, "text/xml") {
 		// Use FileArchive for OVF
 		log.Print("Detected XML, assuming OVF type")
-		archive = &FileArchive{Path: fpath}
+		archive = &FileArchive{Path: optflags.Path}
+		fpath = optflags.Path
 	} else {
 		// Use TapeArchive for OVA
 		log.Print("Detected non-XML, assuming OVA type")
-		archive = &TapeArchive{Path: fpath}
+		archive = &TapeArchive{Path: optflags.Path}
 		fpath = "*.ovf"
 	}
-	var options = &Options{Name: &vmName}
+	//var options = &Options{Name: &vmName}
 	cmd := &ovfx{
-		Name:        vmName,
-		ArchiveFlag: &ArchiveFlag{Archive: archive},
-		OptionsFlag: &OptionsFlag{Options: *options, Path: optionsList},
+
+		// Name:        *optflags.Options.Name,
+		// ArchiveFlag: &ArchiveFlag{Archive: archive},
+		// Target:      optflags.Target,
+		// Options:    optflags.Options,
+		// OutputFlag: &flags.OutputFlag{TTY: true},
 		OutputFlag:  &flags.OutputFlag{TTY: true},
+		ArchiveFlag: &ArchiveFlag{Archive: archive},
+		OptionsFlag: optflags,
+		Name:        *optflags.Options.Name,
+		Client:      c.Client,
 	}
 
-	// Simple example code to login
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Connect and log in to ESX or vCenter
-	c, err := examples.NewClient(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	cmd.Client = c.Client
-	defer c.Logout(ctx)
+	//cmd.Client = c.Client
 
 	// obtain OVF data and parse
 	o, err := cmd.ReadOvf(fpath)
@@ -152,11 +151,11 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		panic(err)
 	}
 
-	//parse options
-	err2 := cmd.OptionsFlag.Process(ctx)
-	if err2 != nil {
-		log.Print("Faileed to parse options")
-	}
+	// //parse options
+	// err = cmd.OptionsFlag.Process(ctx)
+	// if err != nil {
+	// 	log.Print("Faileed to parse options")
+	// }
 
 	//check the options data
 	log.Print("Options flags: ", cmd.Options)
@@ -181,73 +180,10 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		name = cmd.Name
 	}
 
-	//Locate datacenter
-	finder := find.NewFinder(cmd.Client, true)
-	// assume we're only using 1 datacenter for now
-	datacenter, err := finder.DefaultDatacenter(ctx)
-	if err != nil {
-		log.Print("More than one Datacenter was found but code assuming only a single DC present")
-		panic(err)
-	}
-	cmd.Datacenter = datacenter
-	finder = finder.SetDatacenter(datacenter)
-
-	var rootPath = datacenter.InventoryPath
-	log.Print("Using the root path: ", rootPath)
-
-	//Locate resource pool
-	clusters, err := finder.ClusterComputeResourceList(ctx, "*")
-	if err != nil {
-		log.Print("Could not retrieve ClusterComputeResource under path: ", rootPath)
-		panic(err)
-	}
-	if len(clusters) == 0 {
-		log.Fatal("No clusters found, aborting.")
-	}
-	var cluster = clusters[0]
-	var hosts []*object.HostSystem
-	hosts, err = cluster.ComputeResource.Hosts(ctx)
+	_, err = cmd.Target.Validate(ctx, c.Client)
 	if err != nil {
 		panic(err)
 	}
-	if len(hosts) == 0 {
-		log.Fatal("No hostssystems found, aborting.")
-	}
-	var host = hosts[0]
-	cmd.HostSystem = host
-	log.Print("Found a cluster called: ", cluster.Name())
-	log.Print("Found a host in the cluster called: ", host.Name())
-	cmd.ResourcePool, err = cluster.ComputeResource.ResourcePool(ctx)
-	if err != nil {
-		log.Print("More than one ResourcePool was found but code assuming only a single ResourcePool present")
-		panic(err)
-	}
-	log.Print("Found a ResourcePool with name: ", cmd.ResourcePool.Name())
-
-	//Locate datastores
-	datastore, err := finder.Datastore(ctx, rootPath+"/datastore/"+datastoreName)
-	// datastores, err := finder.DatastoreList(ctx, "*")
-	if err != nil {
-		log.Fatal(err)
-	}
-	// for _, ds := range datastores {
-	// 	log.Printf("Datastore: %v %v\n", ds.Name(), ds.InventoryPath)
-	// }
-	log.Print("Found the datastore with name: ", datastore.Name())
-
-	cmd.Datastore = datastore
-
-	log.Print(cmd.NetworkMap(e))
-
-	//Locate folder
-	folder, err := finder.Folder(ctx, rootPath+"/vm")
-	if err != nil {
-		log.Fatal("Cannot find VM folder: ", err)
-	}
-	cmd.Folder = folder
-
-	//Locate networks
-	//TODO
 
 	cisp := types.OvfCreateImportSpecParams{
 		DiskProvisioning:   cmd.Options.DiskProvisioning,
@@ -264,7 +200,7 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 	log.Print(cisp)
 
 	ovfm := object.NewOvfManager(cmd.Client)
-	spec, err := ovfm.CreateImportSpec(ctx, string(o), cmd.ResourcePool, cmd.Datastore, cisp)
+	spec, err := ovfm.CreateImportSpec(ctx, string(o), cmd.Target.ResourcePool(), cmd.Target.Datastore(), cisp)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -286,7 +222,7 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		}
 	}
 
-	lease, err := cmd.ResourcePool.ImportVApp(ctx, spec.ImportSpec, folder, host)
+	lease, err := cmd.Target.ResourcePool().ImportVApp(ctx, spec.ImportSpec, cmd.Target.Folder(), cmd.Target.HostSystem())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -327,7 +263,7 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 	defer u.Done()
 
 	for _, i := range items {
-		err = cmd.Upload(lease, i)
+		err = cmd.FileUpload(lease, i)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -338,10 +274,63 @@ func Upload(datastoreName string, clusterName string, optionsList string, vmName
 		panic(err)
 	}
 	vm := object.NewVirtualMachine(cmd.Client, *moref)
-	if err := cmd.InjectOvfEnv(vm); err != nil {
+	err = cmd.Deploy(vm)
+	if err != nil {
 		panic(err)
 	}
+}
 
+func (cmd *ovfx) Deploy(vm *object.VirtualMachine) error {
+
+	if err := cmd.InjectOvfEnv(vm); err != nil {
+		return err
+	}
+
+	if err := cmd.PowerOn(vm); err != nil {
+		return err
+	}
+
+	if err := cmd.WaitForIP(vm); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (cmd *ovfx) WaitForIP(vm *object.VirtualMachine) error {
+	ctx := context.TODO()
+	if !cmd.Options.PowerOn || !cmd.Options.WaitForIP {
+		return nil
+	}
+
+	cmd.Log("Waiting for IP address...\n")
+	ip, err := vm.WaitForIP(ctx)
+	if err != nil {
+		return err
+	}
+
+	cmd.Log(fmt.Sprintf("Received IP address: %s\n", ip))
+	return nil
+}
+
+func (cmd *ovfx) PowerOn(vm *object.VirtualMachine) error {
+	ctx := context.TODO()
+
+	if !cmd.Options.PowerOn {
+		return nil
+	}
+
+	cmd.Log("Powering on VM...\n")
+
+	task, err := vm.PowerOn(ctx)
+	if err != nil {
+		return err
+	}
+
+	if _, err = task.WaitForResult(ctx, nil); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (cmd *ovfx) InjectOvfEnv(vm *object.VirtualMachine) error {
@@ -434,7 +423,7 @@ func (cmd *ovfx) NetworkMap(e *ovf.Envelope) (p []types.OvfNetworkMapping) {
 	return
 }
 
-func (cmd *ovfx) Upload(lease *object.HttpNfcLease, ofi ovfFileItem) error {
+func (cmd *ovfx) FileUpload(lease *object.HttpNfcLease, ofi ovfFileItem) error {
 	item := ofi.item
 	file := item.Path
 
