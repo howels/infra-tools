@@ -59,6 +59,7 @@ type OptionsFlagTarget interface {
 	ResourcePool() *object.ResourcePool
 	HostSystem() *object.HostSystem
 	Folder() *object.Folder
+	Datacenter() *object.Datacenter
 }
 
 // OptionsFlag is the common parent struct for options
@@ -70,6 +71,7 @@ type OptionsFlag struct {
 
 // OptionsFlagVC carries the config for VC-based targets
 type OptionsFlagVC struct {
+	finder           *find.Finder
 	DatastoreName    string
 	datastore        *object.Datastore
 	DatacenterName   string
@@ -86,6 +88,7 @@ type OptionsFlagVC struct {
 
 // OptionsFlagHost carries the config for ESXi-based deployments
 type OptionsFlagHost struct {
+	finder           *find.Finder
 	DatastoreName    string
 	datastore        *object.Datastore
 	hostSystem       *object.HostSystem
@@ -93,6 +96,16 @@ type OptionsFlagHost struct {
 	folder           *object.Folder
 	ResourcePoolName string
 	resourcePool     *object.ResourcePool
+}
+
+//Datacenter gets the datacenter object
+func (flag *OptionsFlagVC) Datacenter() *object.Datacenter {
+	return flag.datacenter
+}
+
+//Datacenter gets the datacenter object
+func (flag *OptionsFlagHost) Datacenter() *object.Datacenter {
+	return nil
 }
 
 //Datastore gets the datastore object
@@ -138,21 +151,21 @@ func (flag *OptionsFlagHost) Folder() *object.Folder {
 //Validate checks options
 func (flag *OptionsFlagVC) Validate(ctx context.Context, client *vim25.Client) (bool, error) {
 	//Locate datacenter
-	finder := find.NewFinder(client, true)
+	flag.finder = find.NewFinder(client, true)
 	// assume we're only using 1 datacenter for now
-	datacenter, err := finder.DefaultDatacenter(ctx)
+	datacenter, err := flag.finder.DefaultDatacenter(ctx)
 	if err != nil {
 		log.Print("More than one Datacenter was found but code assuming only a single DC present")
 		panic(err)
 	}
 	flag.datacenter = datacenter
-	finder = finder.SetDatacenter(datacenter)
+	flag.finder = flag.finder.SetDatacenter(datacenter)
 
 	var rootPath = datacenter.InventoryPath
 	log.Print("Using the root path: ", rootPath)
 
 	//Locate resource pool
-	clusters, err := finder.ClusterComputeResourceList(ctx, "*")
+	clusters, err := flag.finder.ClusterComputeResourceList(ctx, "*")
 	if err != nil {
 		log.Print("Could not retrieve ClusterComputeResource under path: ", rootPath)
 		panic(err)
@@ -182,7 +195,7 @@ func (flag *OptionsFlagVC) Validate(ctx context.Context, client *vim25.Client) (
 	log.Print("Found a ResourcePool with name: ", flag.resourcePool.Name())
 
 	//Locate datastores
-	datastore, err := finder.Datastore(ctx, rootPath+"/datastore/"+flag.DatastoreName)
+	datastore, err := flag.finder.Datastore(ctx, rootPath+"/datastore/"+flag.DatastoreName)
 	// datastores, err := finder.DatastoreList(ctx, "*")
 	if err != nil {
 		log.Fatal(err)
@@ -197,7 +210,7 @@ func (flag *OptionsFlagVC) Validate(ctx context.Context, client *vim25.Client) (
 	//log.Print(cmd.NetworkMap(e))
 
 	//Locate folder
-	folder, err := finder.Folder(ctx, rootPath+"/vm")
+	folder, err := flag.finder.Folder(ctx, rootPath+"/vm")
 	if err != nil {
 		log.Fatal("Cannot find VM folder: ", err)
 	}
@@ -211,12 +224,12 @@ func (flag *OptionsFlagVC) Validate(ctx context.Context, client *vim25.Client) (
 //Validate checks options
 func (flag *OptionsFlagHost) Validate(ctx context.Context, client *vim25.Client) (bool, error) {
 	//Locate datacenter
-	finder := find.NewFinder(client, true)
+	flag.finder = find.NewFinder(client, true)
 	// assume we're only using 1 datacenter for now
 	var rootPath = "/"
 	log.Print("Using the root path: ", rootPath)
 
-	host, err := finder.DefaultHostSystem(ctx)
+	host, err := flag.finder.DefaultHostSystem(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -232,7 +245,7 @@ func (flag *OptionsFlagHost) Validate(ctx context.Context, client *vim25.Client)
 	log.Print("Found a ResourcePool with name: ", flag.resourcePool.Name())
 
 	//Locate datastores
-	datastore, err := finder.Datastore(ctx, rootPath+"/datastore/"+flag.DatastoreName)
+	datastore, err := flag.finder.Datastore(ctx, rootPath+"/datastore/"+flag.DatastoreName)
 	// datastores, err := finder.DatastoreList(ctx, "*")
 	if err != nil {
 		log.Fatal(err)
@@ -247,7 +260,7 @@ func (flag *OptionsFlagHost) Validate(ctx context.Context, client *vim25.Client)
 	//log.Print(cmd.NetworkMap(e))
 
 	//Locate folder
-	folder, err := finder.Folder(ctx, rootPath+"/vm")
+	folder, err := flag.finder.Folder(ctx, rootPath+"/vm")
 	if err != nil {
 		log.Fatal("Cannot find VM folder: ", err)
 	}

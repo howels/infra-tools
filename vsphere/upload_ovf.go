@@ -185,6 +185,8 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 		panic(err)
 	}
 
+	log.Printf("Network mapping: %+v", cmd.NetworkMap(e))
+
 	cisp := types.OvfCreateImportSpecParams{
 		DiskProvisioning:   cmd.Options.DiskProvisioning,
 		EntityName:         name,
@@ -197,7 +199,7 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 		NetworkMapping:  cmd.NetworkMap(e),
 	}
 
-	log.Print(cisp)
+	log.Printf("Ciscp: %+v", cisp)
 
 	ovfm := object.NewOvfManager(cmd.Client)
 	spec, err := ovfm.CreateImportSpec(ctx, string(o), cmd.Target.ResourcePool(), cmd.Target.Datastore(), cisp)
@@ -221,6 +223,8 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 			s.VAppConfigSpec.Annotation = cmd.Options.Annotation
 		}
 	}
+
+	log.Printf("Spec: %+v", spec.ImportSpec)
 
 	lease, err := cmd.Target.ResourcePool().ImportVApp(ctx, spec.ImportSpec, cmd.Target.Folder(), cmd.Target.HostSystem())
 	if err != nil {
@@ -394,11 +398,10 @@ func (cmd *ovfx) Map(op []Property) (p []types.KeyValue) {
 
 func (cmd *ovfx) NetworkMap(e *ovf.Envelope) (p []types.OvfNetworkMapping) {
 	ctx := context.TODO()
-	// finder, err := cmd.DatastoreFlag.Finder()
 	finder := find.NewFinder(cmd.Client, true)
-	// if err != nil {
-	// 	return
-	// }
+	if datacenter := cmd.OptionsFlag.Target.Datacenter(); datacenter != nil {
+		finder = finder.SetDatacenter(datacenter)
+	}
 
 	networks := map[string]string{}
 
@@ -409,6 +412,7 @@ func (cmd *ovfx) NetworkMap(e *ovf.Envelope) (p []types.OvfNetworkMapping) {
 	}
 
 	for _, net := range cmd.Options.NetworkMapping {
+		log.Printf("Mapping network '%v' to portgroup '%v'", net.Name, net.Network)
 		networks[net.Name] = net.Network
 	}
 
@@ -418,6 +422,8 @@ func (cmd *ovfx) NetworkMap(e *ovf.Envelope) (p []types.OvfNetworkMapping) {
 				Name:    src,
 				Network: net.Reference(),
 			})
+		} else {
+			log.Printf("Cannot locate network: '%v', error: '%v'", dst, err)
 		}
 	}
 	return
