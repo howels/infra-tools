@@ -110,12 +110,22 @@ func (sdc *SDCESXi) EnablePassthrough(devname string, client *govmomi.Client) er
 			log.Printf("Found target device with name: '%v' and model: '%v'", dev.VendorName, dev.DeviceName)
 		}
 	}
-	hostpciconfigitem := types.HostPciPassthruConfig{Id: targetDev.Id, PassthruEnabled: true}
-	passthroughConfig := []types.BaseHostPciPassthruConfig{hostpciconfigitem.GetHostPciPassthruConfig()}
+	// hostpciconfigitem := types.HostPciPassthruConfig{Id: targetDev.Id, PassthruEnabled: true}
+	// passthroughConfig := []types.BaseHostPciPassthruConfig{hostpciconfigitem.GetHostPciPassthruConfig()}
+	// req := types.UpdatePassthruConfig{
+	// 	This:   passthroughSystem.Reference(),
+	// 	Config: passthroughConfig,
+	// }
 	req := types.UpdatePassthruConfig{
-		This:   passthroughSystem.Reference(),
-		Config: passthroughConfig,
+		This: passthroughSystem.Reference(),
+		Config: []types.BaseHostPciPassthruConfig{
+			&types.HostPciPassthruConfig{
+				Id:              targetDev.Id,
+				PassthruEnabled: true,
+			},
+		},
 	}
+
 	res, err := methods.UpdatePassthruConfig(ctx, client.RoundTripper, &req)
 	if err != nil {
 		return err
