@@ -20,6 +20,7 @@ import (
 	// "github.com/vmware/govmomi/vim25/types"
 	"fmt"
 
+	"github.com/howels/infra-tools/ssh"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/vim25/methods"
 	"github.com/vmware/govmomi/vim25/mo"
@@ -28,8 +29,43 @@ import (
 
 //SDCESXi describes the ESXi host being used as ScaleIO init or SDC.
 type SDCESXi struct {
-	HostSystem *object.HostSystem
-	Network    NetworkMap
+	HostSystem  *object.HostSystem
+	Network     NetworkMap
+	MdmIPString string
+	IniGUIDStr  string
+	Hostname    string
+	SSH         sshclient.ShellConnection
+}
+
+//Command allows for SSH commands to be sent to the ESXI server
+func (sdc *SDCESXi) Command(cmd string) (*sshclient.CommandOutput, error) {
+	// s := sshclient.NewSSHClient("sshtest", "sshtest", "localhost")
+	out, err := sdc.SSH.Command(cmd)
+	if err != nil {
+		return out, err
+	}
+	fmt.Println(string(out.Stdout))
+	return out, nil
+}
+
+//UpdateScini writes values to the scini module configuration in ESXi
+func (sdc *SDCESXi) UpdateScini(mdmIP string, guid string) error {
+	if sdc.MdmIPString == "" {
+		return fmt.Errorf("No MDM IP assigned for SDCESXi, cannot set guid without MDMIPString")
+	}
+	_, err := sdc.Command(fmt.Sprintf("esxcli system module parameters set -m scini -p 'IoctlIniGuidStr=%v IoctlMdmIPStr=%v'", mdmIP, guid))
+	if err != nil {
+		return err
+	}
+	sdc.IniGUIDStr = guid
+	sdc.MdmIPString = mdmIP
+	_, err = sdc.Command("vmkload_mod -u scini;esxcli system module load -m scini")
+	if err != nil {
+		return err
+	}
+
+	return nil
+
 }
 
 //EnablePassthrough makes a hardware device available to VMs if it matches a name pattern
