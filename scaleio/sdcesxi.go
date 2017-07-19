@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/howels/infra-tools/ssh"
+	"github.com/howels/infra-tools/vsphere"
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/vim25/methods"
 	"github.com/vmware/govmomi/vim25/mo"
@@ -35,6 +36,7 @@ type SDCESXi struct {
 	IniGUIDStr  string
 	Hostname    string
 	SSH         sshclient.ShellConnection
+	Vcenter     *vsphere.Vcenter
 }
 
 //Command allows for SSH commands to be sent to the ESXI server
@@ -69,14 +71,22 @@ func (sdc *SDCESXi) UpdateScini(mdmIP string, guid string) error {
 }
 
 //EnablePassthrough makes a hardware device available to VMs if it matches a name pattern
-func (sdc *SDCESXi) EnablePassthrough(devname string, client *govmomi.Client) error {
+func (sdc *SDCESXi) EnablePassthrough(devname string) error {
+	err := sdc.Vcenter.Login()
+	if err != nil {
+		log.Print("vCenter login failed")
+		return err
+	}
+	//defer sdc.Vcenter.Logout()
+	client := sdc.Vcenter.Client
+	ctx := sdc.Vcenter.Context
+
 	var h mo.HostSystem
 
-	ctx := context.TODO()
-
 	//no govmomi support for the pcpassthrusystem objects so gotta get the underlying managed objects
-	err := sdc.HostSystem.Properties(ctx, sdc.HostSystem.Reference(), []string{"configManager.pciPassthruSystem"}, &h)
+	err = sdc.HostSystem.Properties(ctx, sdc.HostSystem.Reference(), []string{"configManager.pciPassthruSystem", "hardware.pciDevice"}, &h)
 	if err != nil {
+		log.Print("Failed to retrieve ESXi hostsystem object")
 		return err
 	}
 	passthrough := h.ConfigManager.PciPassthruSystem
@@ -211,7 +221,7 @@ func (sdc *SDCESXi) deployVnics(c *govmomi.Client) error {
 					if portgroup.Name != targetPortgroup { //we may need to find a better data construct as '-' isn't allowed in struct attribute names
 						continue
 					}
-					distributedVirtualPort := *types.DistributedVirtualSwitchPortConnection{
+					distributedVirtualPort := types.DistributedVirtualSwitchPortConnection{
 						PortgroupKey: portgroup.Key,
 						SwitchUuid:   dvs.Uuid,
 					}
@@ -219,14 +229,19 @@ func (sdc *SDCESXi) deployVnics(c *govmomi.Client) error {
 						Dhcp:       false,
 						IpAddress:  network.IP,
 						SubnetMask: network.Netmask},
-						DistributedVirtualPort: distributedVirtualPort,
+						DistributedVirtualPort: &distributedVirtualPort,
 					}
+					portgroupfound = true
+				}
+				if portgroupfound == false {
+					return fmt.Errorf("Portgroup '%v' not found on DVS '%v'", targetPortgroup, dvs.Name)
 				}
 				result, err := networkSystemobj.AddVirtualNic(ctx, "", hostVirtualNicSpec)
 				if err != nil {
 					log.Printf("Error adding VNIC '%v' to vSwitch", targetPortgroup+"-vnic")
 					return err
 				}
+				log.Printf("Virtual NIC response: %v", result)
 			}
 			if dvsfound == false {
 				return fmt.Errorf("DVS: '%v' was not found on this vCenter", network.Dvs)
@@ -243,7 +258,7 @@ func (sdc *SDCESXi) deployVnics(c *govmomi.Client) error {
 					if portgroup.Spec.Name != targetPortgroup {
 						continue
 					}
-					vnicfound := false
+					//vnicfound := false
 					for _, vnic := range networkSystem.NetworkInfo.Vnic {
 						if vnic.Portgroup == targetPortgroup {
 							log.Printf("VNIC already exists on portgroup '%v'", vnic.Portgroup)
@@ -266,15 +281,20 @@ func (sdc *SDCESXi) deployVnics(c *govmomi.Client) error {
 						IpAddress:  network.IP,
 						SubnetMask: network.Netmask},
 					}
+					portgroupfound = true
+				}
+				if portgroupfound == false {
+					fmt.Errorf("Portgroup not found '%v' on vSwitch", targetPortgroup)
 				}
 				result, err := networkSystemobj.AddVirtualNic(ctx, targetPortgroup+"-vnic", hostVirtualNicSpec)
 				if err != nil {
 					log.Printf("Error adding VNIC '%v' to DVS", targetPortgroup+"-vnic")
 					return err
 				}
+				log.Printf("Virtual NIC response: %v", result)
 			}
 
 		}
 	}
-
+	return nil
 }

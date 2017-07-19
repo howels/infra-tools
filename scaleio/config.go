@@ -84,7 +84,7 @@ type Host struct {
 type NetworkMap struct {
 	SIODATA1 Network `json:"SIO-DATA1"`
 	SIODATA2 Network `json:"SIO-DATA2"`
-	SIOMGMT  Network `json:"SIO-MGMT"`
+	SIOMGMT  Network `json:"SIO-MGMT,omniempty"`
 }
 
 type Network struct {
