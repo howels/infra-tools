@@ -8,12 +8,14 @@ import (
 	"github.com/ghodss/yaml"
 )
 
+//BMC credentials
 type BMC struct {
 	username string
 	password string
 	hostname string
 }
 
+//Config is thre top-level item
 type Config struct {
 	Vblock         string
 	VCSAManagement ConfigVM `json:"vcsa_management"`
@@ -35,6 +37,7 @@ type Config struct {
 	PackageURL    string `json:"package_url"`
 }
 
+//ConfigVM carrries the location where an OVA is installed plus it's config parameters
 type ConfigVM struct {
 	Target Target
 	Config struct {
@@ -42,6 +45,7 @@ type ConfigVM struct {
 	}
 }
 
+//Target descibes the destination where an OVA is deployed.
 type Target struct {
 	ESXi           Credentials `json:"esxi"`
 	Portgroup      string
@@ -51,6 +55,7 @@ type Target struct {
 	Vcenter        Credentials `json:",omitempty"`
 }
 
+//ConfigVCSA carries VCSA-specific parameters for building the VM.
 type ConfigVCSA struct {
 	OVA              string `json:"ova"`
 	FQDN             string `json:"fqdn"`
@@ -63,12 +68,14 @@ type ConfigVCSA struct {
 	DiskMode         string
 }
 
+//Credentials is the minimum login info for equipment using username/password auth
 type Credentials struct {
 	IP   string
 	User string
 	Pass string
 }
 
+//Host describes an (ESXi) host to be built
 type Host struct {
 	Hostname  string   `json:"hostname"`
 	Location  []string `json:"location"`
@@ -81,12 +88,14 @@ type Host struct {
 	SDS       SDSConfig `json:"sds"`
 }
 
+//NetworkMap is a list of ScaleIO-specific networks
 type NetworkMap struct {
 	SIODATA1 Network `json:"SIO-DATA1"`
 	SIODATA2 Network `json:"SIO-DATA2"`
 	SIOMGMT  Network `json:"SIO-MGMT,omniempty"`
 }
 
+//Network is a ScaleIO network object as used on ESXi hosts and SDS Vms
 type Network struct {
 	Role     string
 	Nics     []string `json:",omitempty"`
@@ -100,6 +109,7 @@ type Network struct {
 	VnicName string `json:"vnic_name,omitempty"`
 }
 
+//SDSConfig describes an SDS VM
 type SDSConfig struct {
 	VMName          string `json:"vm_name"`
 	NetworkMappings struct {
