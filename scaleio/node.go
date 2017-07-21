@@ -108,7 +108,7 @@ func (node *Node) Install() error {
 	return nil
 }
 
-//ManagementIP produces the IP needed to connect.
+//MgmtIP produces the IP needed to connect.
 func (node *Node) MgmtIP() net.IP {
 	ip, _, err := net.ParseCIDR(node.ManagementNetwork)
 	if err != nil {
@@ -117,6 +117,7 @@ func (node *Node) MgmtIP() net.IP {
 	return ip
 }
 
+//MgmtIPString provides the CSV IP string the ScaleIO uses
 func (node *Node) MgmtIPString() string {
 	return node.MgmtIP().String()
 }
