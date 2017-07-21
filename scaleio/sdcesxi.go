@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/vmware/govmomi/examples"
+	"github.com/vmware/govmomi/find"
 	"github.com/vmware/govmomi/object"
 	"github.com/vmware/govmomi/property"
 	"github.com/vmware/govmomi/view"
@@ -22,7 +22,6 @@ import (
 
 	"github.com/howels/infra-tools/ssh"
 	"github.com/howels/infra-tools/vsphere"
-	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/vim25/methods"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
@@ -37,6 +36,191 @@ type SDCESXi struct {
 	Hostname    string
 	SSH         sshclient.ShellConnection
 	Vcenter     *vsphere.Vcenter
+}
+
+//SDS finds a VM providingg the SDS if it exists.
+func (sdc *SDCESXi) SDS() (*object.VirtualMachine, error) {
+	err := sdc.Vcenter.Login()
+	if err != nil {
+		log.Print("vCenter login failed")
+		return nil, err
+	}
+	pc := property.DefaultCollector(sdc.Vcenter.Client.Client)
+
+	var vmmorefs []types.ManagedObjectReference
+	err = sdc.HostSystem.Properties(sdc.Vcenter.Context, sdc.HostSystem.Reference(), []string{"vm"}, &vmmorefs)
+	if err != nil {
+		log.Print("Failed to retrieve ESXi hostsystem object")
+		return nil, err
+	}
+
+	var vms []*mo.VirtualMachine
+	err = pc.Retrieve(sdc.Vcenter.Context, vmmorefs, nil, &vms)
+	if err != nil {
+		return nil, err
+	}
+	var vm *mo.VirtualMachine
+	for _, a := range vms {
+		if a.Name == strings.Split(sdc.HostSystem.Name(), ("."))[0]+"-scaleio" {
+			vm = a
+		}
+	}
+	vmObject := object.NewVirtualMachine(sdc.Vcenter.Client.Client, vm.Reference())
+	return vmObject, nil
+
+}
+
+//RemoveSDS will power off and delete the SDS VM
+func (sdc *SDCESXi) RemoveSDS() error {
+	vm, err := sdc.SDS()
+	if err != nil {
+		log.Print("SDS VM not found")
+		return err
+	}
+	task, err := vm.PowerOff(sdc.Vcenter.Context)
+	if _, err = task.WaitForResult(sdc.Vcenter.Context, nil); err != nil {
+		log.Print("Could not power off VM: " + vm.Name())
+		//return err
+	}
+	task, err = vm.Destroy(sdc.Vcenter.Context)
+	if _, err = task.WaitForResult(sdc.Vcenter.Context, nil); err != nil {
+		log.Print("Could not delete VM: " + vm.Name())
+		return err
+	}
+	return nil
+}
+
+//DeployTemplate creates a VM with the specified SDS information
+func (sdc *SDCESXi) DeployTemplate(fpath string) (*object.VirtualMachine, error) {
+	var mh mo.HostSystem
+	vmName := "scaleio-template"
+
+	err := sdc.HostSystem.Properties(sdc.Vcenter.Context, sdc.HostSystem.Reference(), []string{"parent"}, &mh)
+	if err != nil {
+		return nil, err
+	}
+	if mh.Parent.Type != "ClusterComputeResource" {
+		log.Printf("Host is not in a cluster")
+		return nil, fmt.Errorf("Host is not in a cluster, cannot deploy SDS VM")
+	}
+	cluster := object.NewClusterComputeResource(sdc.Vcenter.Client.Client, mh.Parent.Reference())
+	//clusterName := cluster.Name()
+
+	//Find Datacenter that host is in
+	finder := find.NewFinder(sdc.Vcenter.Client.Client, true)
+	dcs, err := finder.DatacenterList(sdc.Vcenter.Context, "*")
+	var datacenter *object.Datacenter
+
+	for _, dc := range dcs {
+		// Make future calls local to this datacenter
+		finder.SetDatacenter(dc)
+
+		// Find virtual machines in datacenter
+		hosts, err := finder.HostSystemList(sdc.Vcenter.Context, "*")
+		if err != nil {
+			panic(err)
+		}
+
+		for _, a := range hosts {
+			if a.Name() == sdc.HostSystem.Name() {
+				datacenter = dc
+				break
+			}
+		}
+	}
+
+	var options = &vsphere.OptionsFlag{
+		Target: &vsphere.OptionsFlagVC{
+			DatacenterName: datacenter.Name(),
+			DatastoreName:  strings.Split(sdc.HostSystem.Name(), ("."))[0] + "-local-storage-1",
+			ClusterName:    cluster.Name(),
+		},
+		Path: fpath,
+		Options: vsphere.Options{
+			NetworkMapping: []vsphere.Network{},
+			Name:           &vmName,
+		},
+	}
+
+	vm, err := vsphere.Upload(sdc.Vcenter.Context, options, sdc.Vcenter.Client)
+	if err != nil {
+		return nil, err
+	}
+	return vm, nil
+}
+
+//DeploySVM creates a new VM on this host based on the supplied template VM.
+func (sdc *SDCESXi) DeploySVM(template *object.VirtualMachine, sds *SDSNode) (*object.VirtualMachine, error) {
+	//take the template and clone, configure and power-on a VM based on the Node config.
+	datastoreName := strings.Split(sdc.HostSystem.Name(), ("."))[0] + "-local-storage-1"
+	finder := find.NewFinder(sdc.Vcenter.Client.Client, true)
+	dcs, err := finder.DatacenterList(sdc.Vcenter.Context, "*")
+	var datacenter *object.Datacenter
+
+	for _, dc := range dcs {
+		// Make future calls local to this datacenter
+		finder.SetDatacenter(dc)
+
+		// Find virtual machines in datacenter
+		hosts, err := finder.HostSystemList(sdc.Vcenter.Context, "*")
+		if err != nil {
+			panic(err)
+		}
+
+		for _, a := range hosts {
+			if a.Name() == sdc.HostSystem.Name() {
+				datacenter = dc
+				break
+			}
+		}
+	}
+	datastores, err := finder.DatastoreList(sdc.Vcenter.Context, datacenter.InventoryPath+"/datastore/"+datastoreName)
+	// datastores, err := finder.DatastoreList(ctx, "*")
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(datastores) != 1 {
+		return nil, fmt.Errorf("Found more than one or no datastores named: " + datastoreName)
+	}
+	datastore := datastores[0]
+
+	//find the folder which the template is alrerady in
+	var vm mo.VirtualMachine
+	err = template.Properties(sdc.Vcenter.Context, template.Reference(), []string{"parent"}, &vm)
+	if err != nil {
+		log.Print("Failed to retrieve template's parent folder")
+		return nil, err
+	}
+	folder := object.NewFolder(sdc.Vcenter.Client.Client, *vm.Parent)
+
+	datastoreRef := datastore.Reference()
+	hostSystemRef := sdc.HostSystem.Reference()
+
+	spec := types.VirtualMachineCloneSpec{
+		Location: types.VirtualMachineRelocateSpec{
+			Datastore: &datastoreRef,
+			Host:      &hostSystemRef,
+		},
+		PowerOn:  false,
+		Template: false,
+	}
+	cloneTask, err := template.Clone(sdc.Vcenter.Context, folder, sds.Hostname, spec)
+	if _, err = cloneTask.WaitForResult(sdc.Vcenter.Context, nil); err != nil {
+		log.Print("Could not clone VM: " + sds.Hostname)
+		return nil, err
+	}
+	var taskObject mo.Task
+	err = cloneTask.Properties(sdc.Vcenter.Context, cloneTask.Reference(), []string{"info.result"}, &taskObject)
+	if err != nil {
+		log.Print("Failed to retrieve clone task's result")
+		return nil, err
+	}
+	var newVM mo.VirtualMachine
+	newVM, ok := taskObject.Info.Result.(mo.VirtualMachine)
+	if ok == false {
+		return nil, fmt.Errorf("could not get VM object from completed clone task info")
+	}
+	return object.NewVirtualMachine(sdc.Vcenter.Client.Client, newVM.Reference()), nil
 }
 
 //Command allows for SSH commands to be sent to the ESXI server
@@ -145,18 +329,23 @@ func (sdc *SDCESXi) EnablePassthrough(devname string) error {
 	return nil
 }
 
-func (sdc *SDCESXi) deployVnics(c *govmomi.Client) error {
+func (sdc *SDCESXi) deployVnics() error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Connect and login to ESX or vCenter
-	c, err := examples.NewClient(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
+	// c, err := examples.NewClient(ctx)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
 
-	defer c.Logout(ctx)
+	// defer c.Logout(ctx)
+	err := sdc.Vcenter.Login()
+	if err != nil {
+		return err
+	}
+	c := sdc.Vcenter.Client
 
 	//create a property collector to use later
 	pc := property.DefaultCollector(c.Client)
@@ -284,7 +473,7 @@ func (sdc *SDCESXi) deployVnics(c *govmomi.Client) error {
 					portgroupfound = true
 				}
 				if portgroupfound == false {
-					fmt.Errorf("Portgroup not found '%v' on vSwitch", targetPortgroup)
+					return fmt.Errorf("Portgroup not found '%v' on vSwitch", targetPortgroup)
 				}
 				result, err := networkSystemobj.AddVirtualNic(ctx, targetPortgroup+"-vnic", hostVirtualNicSpec)
 				if err != nil {
