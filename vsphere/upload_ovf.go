@@ -94,7 +94,7 @@ func dectectFileType(filepath string) (string, error) {
 }
 
 // Upload is a test function to push a new OVA to vCenter
-func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
+func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) (*object.VirtualMachine, error) {
 
 	// Setup paths and options
 	// cli.Register("import.ovf", &ovfx{})
@@ -107,7 +107,7 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 
 	ftype, err := dectectFileType(optflags.Path)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	var fpath string
 	var archive Archive
@@ -142,13 +142,13 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 	// obtain OVF data and parse
 	o, err := cmd.ReadOvf(fpath)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	e, err := cmd.ReadEnvelope(fpath)
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to parse ovf: %s", err.Error()))
-		panic(err)
+		return nil, err
 	}
 
 	// //parse options
@@ -182,7 +182,7 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 
 	_, err = cmd.Target.Validate(ctx, c.Client)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	log.Printf("Network mapping: %+v", cmd.NetworkMap(e))
@@ -205,6 +205,7 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 	spec, err := ovfm.CreateImportSpec(ctx, string(o), cmd.Target.ResourcePool(), cmd.Target.Datastore(), cisp)
 	if err != nil {
 		log.Fatal(err)
+		return nil, err
 	}
 	if spec.Error != nil {
 		log.Fatal(errors.New(spec.Error[0].LocalizedMessage))
@@ -229,11 +230,13 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 	lease, err := cmd.Target.ResourcePool().ImportVApp(ctx, spec.ImportSpec, cmd.Target.Folder(), cmd.Target.HostSystem())
 	if err != nil {
 		log.Fatal(err)
+		return nil, err
 	}
 
 	info, err := lease.Wait(ctx)
 	if err != nil {
 		log.Fatal(err)
+		return nil, err
 	}
 
 	// Build slice of items and URLs first, so that the lease updater can know
@@ -250,6 +253,7 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 			u, err := cmd.Client.ParseURL(device.Url)
 			if err != nil {
 				log.Fatal(err)
+				return nil, err
 			}
 
 			i := ovfFileItem{
@@ -270,18 +274,20 @@ func Upload(ctx context.Context, optflags *OptionsFlag, c *govmomi.Client) {
 		err = cmd.FileUpload(lease, i)
 		if err != nil {
 			log.Fatal(err)
+			return nil, err
 		}
 	}
 
 	moref, err := &info.Entity, lease.HttpNfcLeaseComplete(ctx)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	vm := object.NewVirtualMachine(cmd.Client, *moref)
 	err = cmd.Deploy(vm)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
+	return vm, nil
 }
 
 func (cmd *ovfx) Deploy(vm *object.VirtualMachine) error {
