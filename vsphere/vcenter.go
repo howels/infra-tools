@@ -49,6 +49,7 @@ func (vc *Vcenter) newClient(ctx context.Context) (*govmomi.Client, error) {
 	return govmomi.NewClient(ctx, u, vc.Insecure)
 }
 
+//Login authenticates with vCenter if not already authenticated
 func (vc *Vcenter) Login() error {
 	log.Print("Login requested")
 	if vc.Client != nil {
@@ -64,6 +65,7 @@ func (vc *Vcenter) Login() error {
 	return nil
 }
 
+//Logout removes the session with vCenter
 func (vc *Vcenter) Logout() error {
 	log.Print("Logout from VC")
 	err := vc.Client.Logout(vc.Context)
