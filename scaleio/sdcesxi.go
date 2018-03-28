@@ -365,9 +365,6 @@ func (sdc *SDCESXi) deployVnics() error {
 	}
 
 	defer v.Destroy(ctx)
-	var dvss []mo.DistributedVirtualSwitch
-
-	err = v.Retrieve(ctx, []string{"DistributedVIrtualSwitch"}, nil, &dvss)
 
 	val := reflect.ValueOf(sdc.Network).Elem()
 
@@ -380,6 +377,9 @@ func (sdc *SDCESXi) deployVnics() error {
 		network = valueField.Interface().(Network)
 		var hostVirtualNicSpec types.HostVirtualNicSpec
 		if network.Dvs != "" {
+			var dvss []mo.DistributedVirtualSwitch
+			err = v.Retrieve(ctx, []string{"DistributedVIrtualSwitch"}, nil, &dvss)
+
 			dvsfound := false
 			for _, dvs := range dvss {
 
